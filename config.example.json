@@ -1,0 +1,19 @@
+{
+  "mimo_api": {
+    "api_key": "在此填入你的 MiMo API Key（必填，获取地址 https://platform.xiaomimimo.com/console）",
+    "base_url": "https://api.xiaomimimo.com/v1",
+    "model": "mimo-v2.5",
+    "max_completion_tokens": 131072,
+    "timeout": 1800
+  },
+  "douyin": {
+    "download_dir": "output",
+    "max_retry": 3,
+    "video_quality": "highest"
+  },
+  "video_analysis": {
+    "fps": 6,
+    "media_resolution": "default",
+    "prompt": "一字不差地提取完整文案，不是总结，而是直接提取逐字稿，让这个视频的作者在拍摄时照着念那种。不用标注时间。需要的话做好分段，用原视频语言。有字幕的话（硬字幕或软字幕）根据字幕来"
+  }
+}
