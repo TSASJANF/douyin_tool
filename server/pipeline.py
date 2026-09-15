@@ -95,7 +95,7 @@ async def run_pipeline(url_text: str, config: dict, on_event: EventCallback) -> 
     download_result = await douyin.download(url_text)
 
     if not download_result:
-        raise PipelineError("下载失败，请检查链接是否有效。")
+        raise PipelineError(douyin.last_error or "下载失败。")
 
     video_1080p = download_result.get("video_1080p")
     output_dir: Path = download_result.get("output_dir")
@@ -160,7 +160,7 @@ async def run_download(url_text: str, config: dict, on_event: EventCallback) -> 
     download_result = await douyin.download(url_text)
 
     if not download_result:
-        raise PipelineError("下载失败，请检查链接是否有效。")
+        raise PipelineError(douyin.last_error or "下载失败。")
 
     on_event("log", {"text": f"下载完成: {download_result.get('video_1080p')}"})
 

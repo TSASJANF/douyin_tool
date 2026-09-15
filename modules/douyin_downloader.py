@@ -20,6 +20,19 @@ from .douyin_resolver import parse_input, resolve_url, fetch_work_info, BROWSER_
 
 EventCallback = Callable[[str, dict], None]
 
+# 视为瞬时故障、值得重试的 HTTP 状态码（限流/服务端错误）
+RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
+# 重试退避：第 n 次重试前等待 n * RETRY_DELAY_BASE 秒
+RETRY_DELAY_BASE = 2.0
+
+
+class _DownloadError(Exception):
+    """单次下载失败；retryable 标记该错误是否值得重试"""
+
+    def __init__(self, message: str, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+
 
 def sanitize_filename(name: str) -> str:
     """清理文件名，移除非法字符"""
@@ -39,6 +52,8 @@ class DouyinDownloader:
         self.output_dir = Path(__file__).parent.parent / config.get("download_dir", "output")
         self.max_retry = config.get("max_retry", 3)
         self.video_quality = config.get("video_quality", "highest")
+        # 最近一次 download 失败的具体原因，供上层（pipeline）透出给用户
+        self.last_error: Optional[str] = None
 
         # 确保输出目录存在
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -86,11 +101,42 @@ class DouyinDownloader:
                 return result.model_dump()
 
         except Exception as e:
-            self._emit_log(f"解析链接失败: {e}")
+            self.last_error = f"解析链接失败: {e}"
+            self._emit_log(self.last_error)
             return None
 
     async def _download_file(self, url: str, filepath: Path, timeout: float = 60.0) -> bool:
-        """下载文件，上报详细进度"""
+        """下载文件（带重试），上报详细进度。
+
+        瞬时网络故障（DNS/连接/超时）与 429/5xx 自动重试，间隔递增；
+        失败原因写入 self.last_error 供上层透出。
+        """
+        attempts = 1 + max(0, self.max_retry)
+
+        for attempt in range(1, attempts + 1):
+            try:
+                await self._download_once(url, filepath, timeout)
+                return True
+            except _DownloadError as e:
+                if not e.retryable or attempt >= attempts:
+                    self.last_error = f"视频下载失败: {e}"
+                    self._emit_log(f"\n{self.last_error}")
+                    return False
+                delay = attempt * RETRY_DELAY_BASE
+                self._emit_log(
+                    f"\n下载失败（第 {attempt}/{attempts} 次尝试）: {e}，{delay:.0f} 秒后重试"
+                )
+                await asyncio.sleep(delay)
+
+        return False
+
+    async def _download_once(self, url: str, filepath: Path, timeout: float) -> None:
+        """单次下载尝试：成功写入 filepath，失败抛 _DownloadError。
+
+        先写 .part 临时文件，成功后原子改名，失败不残留半截文件
+        （半截文件会被 download() 的"已存在则跳过"误判为已下载完成）。
+        """
+        tmp_path = filepath.parent / (filepath.name + ".part")
         try:
             start_time = time.time()
             last_update_time = start_time
@@ -101,7 +147,7 @@ class DouyinDownloader:
                     resp.raise_for_status()
                     total = int(resp.headers.get("content-length", 0))
 
-                    with open(filepath, "wb") as f:
+                    with open(tmp_path, "wb") as f:
                         downloaded = 0
                         async for chunk in resp.aiter_bytes(chunk_size=65536):
                             f.write(chunk)
@@ -147,12 +193,19 @@ class DouyinDownloader:
                                         "eta": None,
                                     })
 
-                    if not self.on_event:
-                        print()  # CLI 单行刷新结束后换行
-            return True
+                        if not self.on_event:
+                            print()  # CLI 单行刷新结束后换行
+            tmp_path.replace(filepath)
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            raise _DownloadError(f"HTTP {code}", retryable=code in RETRYABLE_HTTP_STATUS)
+        except httpx.TransportError as e:
+            # DNS 解析失败、连接失败、读写超时等瞬时网络故障
+            raise _DownloadError(f"{type(e).__name__}: {e}", retryable=True)
         except Exception as e:
-            self._emit_log(f"\n下载失败: {e}")
-            return False
+            raise _DownloadError(f"{type(e).__name__}: {e}")
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
     def _format_time(self, seconds: float) -> str:
         """格式化时间"""
@@ -250,7 +303,8 @@ class DouyinDownloader:
 
         if not result or not result.get("ok", True):
             error = result.get("error", {}) if result else {}
-            self._emit_log(f"解析失败: {error.get('message', '未知错误')}")
+            self.last_error = f"解析失败: {error.get('message', '未知错误')}"
+            self._emit_log(self.last_error)
             return None
 
         title = result.get("title", "无标题")
@@ -259,14 +313,16 @@ class DouyinDownloader:
 
         # 检查是否为图文
         if media.get("type") == "图文":
-            self._emit_log("检测到图文内容，本工具仅支持视频解析。")
+            self.last_error = "该链接为图文内容，本工具仅支持视频。"
+            self._emit_log(self.last_error)
             return None
 
         video_url = media.get("url")
         qualities = media.get("qualities", [])
 
         if not video_url and not qualities:
-            self._emit_log("未找到视频资源。")
+            self.last_error = "未找到视频资源。"
+            self._emit_log(self.last_error)
             return None
 
         # 创建输出目录
@@ -291,9 +347,8 @@ class DouyinDownloader:
         if video_1080p_path.exists():
             self._emit_log(f"1080P视频已存在: {video_1080p_path.name}")
         else:
-            success = await self._download_file(url_1080p, video_1080p_path)
-            if not success:
-                self._emit_log("1080P视频下载失败。")
+            # 失败原因已记入 last_error 并输出日志
+            if not await self._download_file(url_1080p, video_1080p_path):
                 return None
 
         # 保存info.txt（详细格式）
