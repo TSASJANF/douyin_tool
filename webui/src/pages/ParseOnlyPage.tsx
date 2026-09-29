@@ -76,7 +76,7 @@ export default function ParseOnlyPage() {
         })
         .catch((e: Error) => {
           options.onError?.(e as never)
-          message.error(e.message)
+          message.error(e.message, 8)
         })
         .finally(() => setUploading(false))
     },
@@ -108,7 +108,7 @@ export default function ParseOnlyPage() {
       })
       message.success('解析任务已创建')
     } catch (e) {
-      message.error(`创建失败: ${e instanceof Error ? e.message : e}`)
+      message.error(`创建失败: ${e instanceof Error ? e.message : e}`, 8)
     } finally {
       setSubmitting(false)
     }

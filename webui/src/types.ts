@@ -21,6 +21,8 @@ export interface TaskResult {
   output_dir: string
   dir?: string
   files: string[]
+  /** 收尾信息：finish_reason=stop 正常结束；length 表示触及输出上限、正文不完整 */
+  finish_reason?: string | null
 }
 
 export interface TaskView {
@@ -41,6 +43,8 @@ export interface TaskView {
 export interface TaskDetail extends TaskView {
   logs: string[]
   result: TaskResult | null
+  /** 流式解析过程：reasoning=思考过程（默认折叠），content=正文增量 */
+  analysis?: { reasoning: string; content: string } | null
 }
 
 /** 任务级临时参数覆盖（空值=跟随全局配置） */

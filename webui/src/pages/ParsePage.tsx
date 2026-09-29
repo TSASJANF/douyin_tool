@@ -36,7 +36,7 @@ export default function ParsePage() {
       setUrl('')
       message.success('任务已创建')
     } catch (e) {
-      message.error(`创建失败: ${e instanceof Error ? e.message : e}`)
+      message.error(`创建失败: ${e instanceof Error ? e.message : e}`, 8)
     } finally {
       setSubmitting(false)
     }

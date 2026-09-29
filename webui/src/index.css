@@ -257,6 +257,48 @@ body {
   color: #27272a;
 }
 
+/* ============ 流式解析输出 ============ */
+.stream-box {
+  background: #fafafa;
+  border: 1px solid #e4e4e7;
+  border-radius: 10px;
+  padding: 14px 16px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.9;
+  font-size: 13px;
+}
+
+.stream-box-content {
+  max-height: 300px;
+  overflow-y: auto;
+  color: #27272a;
+}
+
+.stream-box-reasoning {
+  max-height: 220px;
+  overflow-y: auto;
+  color: #a1a1aa;
+  font-size: 12px;
+}
+
+/* 流式输出光标 */
+.stream-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 15px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: #18181b;
+  animation: stream-blink 1s steps(2, start) infinite;
+}
+
+@keyframes stream-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
 /* ============ Segmented 胶囊 ============ */
 .ant-segmented {
   padding: 3px;

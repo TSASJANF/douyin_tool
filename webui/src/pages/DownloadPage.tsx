@@ -30,7 +30,7 @@ export default function DownloadPage() {
       setUrl('')
       message.success('下载任务已创建')
     } catch (e) {
-      message.error(`创建失败: ${e instanceof Error ? e.message : e}`)
+      message.error(`创建失败: ${e instanceof Error ? e.message : e}`, 8)
     } finally {
       setSubmitting(false)
     }

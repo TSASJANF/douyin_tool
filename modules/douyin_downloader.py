@@ -282,7 +282,9 @@ class DouyinDownloader:
                 # 如果没有重定向，返回原URL
                 return url
         except Exception as e:
-            self._emit_log(f"获取直链失败: {e}")
+            msg = f"获取直链失败: {e}"
+            self.last_error = msg
+            self._emit_log(msg)
             return None
 
     async def download(self, url_text: str) -> Optional[Dict[str, Any]]:

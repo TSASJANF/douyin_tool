@@ -2,8 +2,9 @@
   "mimo_api": {
     "api_key": "在此填入你的 MiMo API Key（必填，获取地址 https://platform.xiaomimimo.com/console）",
     "base_url": "https://api.xiaomimimo.com/v1",
-    "model": "mimo-v2.5",
+    "model": "mimo-v2.6-pro",
     "max_completion_tokens": 131072,
+    "deep_thinking": false,
     "timeout": 1800
   },
   "douyin": {

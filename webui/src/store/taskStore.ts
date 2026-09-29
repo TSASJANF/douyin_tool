@@ -123,6 +123,21 @@ function connectWs(taskId: string, set: SetState, get: GetState) {
       case 'download_progress':
         set({ detail: { ...detail, progress: msg.data as TaskDetail['progress'] } })
         break
+      case 'analysis_delta': {
+        // 流式解析增量：reasoning=思考过程，content=正文
+        const d = msg.data as { reasoning?: string; content?: string }
+        const cur = detail.analysis ?? { reasoning: '', content: '' }
+        set({
+          detail: {
+            ...detail,
+            analysis: {
+              reasoning: cur.reasoning + (d.reasoning ?? ''),
+              content: cur.content + (d.content ?? ''),
+            },
+          },
+        })
+        break
+      }
       case 'log': {
         const text = (msg.data as { text: string }).text
         const logs = [...detail.logs, text].slice(-MAX_LOGS)

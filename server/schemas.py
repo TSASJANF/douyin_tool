@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 class TaskOverrides(BaseModel):
     """任务级临时参数覆盖（仅 video_analysis，白名单字段）"""
-    fps: Optional[int] = Field(default=None, ge=1, le=30)
+    fps: Optional[float] = Field(default=None, ge=0.1, le=10)  # 文档范围 [0.1, 10]
     media_resolution: Optional[str] = Field(default=None, pattern="^(default|max)$")
     prompt: Optional[str] = Field(default=None, min_length=1)
 
@@ -38,6 +38,7 @@ class TaskView(BaseModel):
 class TaskDetailView(TaskView):
     logs: List[str] = Field(default_factory=list)
     result: Optional[Dict[str, Any]] = None
+    analysis: Optional[Dict[str, str]] = None
 
 
 class HistoryFile(BaseModel):

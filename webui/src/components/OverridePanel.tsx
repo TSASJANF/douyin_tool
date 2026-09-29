@@ -51,11 +51,12 @@ export default function OverridePanel({ value, onChange }: Props) {
               <Space wrap size="middle">
                 <div>
                   <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>
-                    抽帧率（全局: {global.fps ?? '-'}）
+                    抽帧率（全局: {global.fps ?? '-'}，合法范围 0.1~10）
                   </Text>
                   <InputNumber
-                    min={1}
-                    max={30}
+                    min={0.1}
+                    max={10}
+                    step={0.1}
                     value={value.fps ?? null}
                     placeholder="跟随全局"
                     style={{ width: 120 }}

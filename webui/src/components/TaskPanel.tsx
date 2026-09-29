@@ -15,6 +15,7 @@ import {
 import { fileDownloadUrl, fileStreamUrl } from '../api/client'
 import { useTaskStore } from '../store/taskStore'
 import { statusTag } from './TaskListCard'
+import AnalysisStream from './AnalysisStream'
 import type { TaskMode } from '../types'
 
 const { Text } = Typography
@@ -94,9 +95,38 @@ export default function TaskPanel() {
         )}
 
         {detail.status === 'failed' && detail.error && (
-          <Alert type="error" showIcon message={detail.error} style={{ marginTop: 12 }} />
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginTop: 12 }}
+            message="任务失败（具体原因如下）"
+            description={
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{detail.error}</div>
+                <Button
+                  size="small"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(detail.error || '')
+                      message.success('错误信息已复制，便于反馈排查')
+                    } catch {
+                      message.error('复制失败，请手动选择复制')
+                    }
+                  }}
+                >
+                  复制错误信息
+                </Button>
+              </Space>
+            }
+          />
         )}
       </Card>
+
+      {/* 流式解析：思考过程（默认折叠）+ 正文实时输出 */}
+      <AnalysisStream
+        analysis={detail.analysis}
+        streaming={detail.status === 'running' || detail.status === 'pending'}
+      />
 
       {/* 运行日志 */}
       <div className="log-box log-box-bottom" ref={logRef}>
@@ -140,9 +170,10 @@ export default function TaskPanel() {
           }
         >
           {result.content ? (
-            <div className="content-box">{result.content}</div>
-          ) : (
-            <Alert
+            <>
+              <div className="content-box">{result.content}</div>
+            </>
+          ) : (            <Alert
               type="success"
               showIcon
               message="视频下载完成，未做解析"

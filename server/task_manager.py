@@ -40,6 +40,7 @@ class Task:
     stage: Optional[Dict[str, Any]] = None
     progress: Optional[Dict[str, Any]] = None
     logs: List[str] = field(default_factory=list)
+    analysis: Dict[str, str] = field(default_factory=lambda: {"reasoning": "", "content": ""})
     result: Optional[Dict[str, Any]] = None
     subscribers: List[asyncio.Queue] = field(default_factory=list)
     aio_task: Optional[asyncio.Task] = None
@@ -77,6 +78,7 @@ class TaskManager:
         if detail:
             data["logs"] = task.logs
             data["result"] = task.result
+            data["analysis"] = task.analysis
         return data
 
     # ---------- 创建与运行 ----------
@@ -146,6 +148,13 @@ class TaskManager:
             task.logs.append(f"—— {data.get('label', '')} ——")
         elif event_type == "download_progress":
             task.progress = data
+        elif event_type == "analysis_delta":
+            # 流式解析增量：reasoning=思考过程，content=正文（累加供快照/重连补发）
+            data = data or {}
+            for key in ("reasoning", "content"):
+                piece = data.get(key)
+                if piece:
+                    task.analysis[key] = (task.analysis.get(key) or "") + piece
         elif event_type == "done":
             task.title = data.get("title", "")
             task.result = data

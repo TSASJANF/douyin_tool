@@ -9,6 +9,7 @@ on_event(type, data) 回调接收事件：
   - stage              {index, label}        阶段切换
   - log                {text}                日志
   - download_progress  {...}                 下载进度（透传自下载器）
+  - analysis_delta     {reasoning|content}   解析增量文本（流式输出，思考过程/正文）
   - done               {title, content?, output_dir, dir, files}
 失败时抛出 PipelineError。
 """
@@ -62,6 +63,11 @@ def _save_content(output_dir: Path, content: str) -> Path:
     return content_file
 
 
+def _attach_finish_info(payload: dict, analyzer) -> None:
+    """把解析收尾信息（是否被截断、是否自动续写过）带出去，供前端透明展示"""
+    payload["finish_reason"] = getattr(analyzer, "finish_reason", None)
+
+
 def _done_payload(title: str, output_dir: Path, content: Optional[str]) -> dict:
     files = sorted(p.name for p in output_dir.iterdir() if p.is_file())
     return {
@@ -95,7 +101,7 @@ async def run_pipeline(url_text: str, config: dict, on_event: EventCallback) -> 
     download_result = await douyin.download(url_text)
 
     if not download_result:
-        raise PipelineError(douyin.last_error or "下载失败。")
+        raise PipelineError(douyin.last_error or "下载失败：下载器未给出具体原因，请查看运行日志")
 
     video_1080p = download_result.get("video_1080p")
     output_dir: Path = download_result.get("output_dir")
@@ -116,14 +122,14 @@ async def run_pipeline(url_text: str, config: dict, on_event: EventCallback) -> 
             break
 
     if not url_720p:
-        raise PipelineError("未找到720P直链")
+        raise PipelineError("未找到 720P 清晰度的视频直链：该作品可能没有此清晰度，或链接已失效，请重试或换一个视频")
 
     on_event("log", {"text": f"720P接口URL: {url_720p[:80]}..."})
 
     real_direct_url = await douyin.get_real_direct_url(url_720p)
 
     if not real_direct_url:
-        raise PipelineError("获取真正直链失败")
+        raise PipelineError(douyin.last_error or "获取真正直链失败：CDN 接口未返回 302 跳转地址，直链可能已失效，请重试")
 
     on_event("log", {"text": f"720P真正直链: {real_direct_url[:80]}..."})
 
@@ -133,12 +139,14 @@ async def run_pipeline(url_text: str, config: dict, on_event: EventCallback) -> 
     content = await asyncio.to_thread(analyzer.analyze_remote_video, real_direct_url)
 
     if not content:
-        raise PipelineError("视频解析失败。")
+        # 透传解析器的具体失败原因（HTTP 状态码/服务端信息/处理建议），不让用户猜
+        raise PipelineError(analyzer.last_error or "视频解析失败：MiMo API 未返回任何内容")
 
     _save_content(output_dir, content)
     on_event("log", {"text": f"解析结果已保存到: {output_dir / '正文.txt'}"})
 
     payload = _done_payload(download_result.get("title", ""), output_dir, content)
+    _attach_finish_info(payload, analyzer)
     on_event("done", payload)
     return payload
 
@@ -160,7 +168,7 @@ async def run_download(url_text: str, config: dict, on_event: EventCallback) -> 
     download_result = await douyin.download(url_text)
 
     if not download_result:
-        raise PipelineError(douyin.last_error or "下载失败。")
+        raise PipelineError(douyin.last_error or "下载失败：下载器未给出具体原因，请查看运行日志")
 
     on_event("log", {"text": f"下载完成: {download_result.get('video_1080p')}"})
 
@@ -203,11 +211,13 @@ async def run_parse(source_type: str, source: str, config: dict, on_event: Event
         content = await asyncio.to_thread(analyzer.analyze_remote_video, source)
 
     if not content:
-        raise PipelineError("视频解析失败。")
+        # 透传解析器的具体失败原因（HTTP 状态码/服务端信息/处理建议），不让用户猜
+        raise PipelineError(analyzer.last_error or "视频解析失败：MiMo API 未返回任何内容")
 
     _save_content(output_dir, content)
     on_event("log", {"text": f"解析结果已保存到: {output_dir / '正文.txt'}"})
 
     payload = _done_payload(title, output_dir, content)
+    _attach_finish_info(payload, analyzer)
     on_event("done", payload)
     return payload

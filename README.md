@@ -9,6 +9,7 @@
 ## 功能特点
 
 - **WebUI**：实时下载进度（速度/百分比/剩余时间）、步骤时间线、运行日志、历史记录浏览、视频在线播放、可视化配置管理
+- **流式解析**：模型输出实时回显，思考过程默认折叠（可点击展开），正文边生成边显示
 - **三种任务模式**：全流程（下载+解析）、仅下载（不消耗 API 额度）、仅解析（本地文件上传或视频直链）
 - **临时参数**：解析任务可临时覆盖抽帧率/分辨率/提示词，仅当次任务生效，不改全局配置
 - 自动下载抖音视频（1080P 保留，720P 直链送解析）
@@ -78,8 +79,9 @@ python main.py
 |------|------|--------|----------|
 | `api_key` | API密钥 | 必填 | 申请地址见上文 |
 | `base_url` | API地址 | `https://api.xiaomimimo.com/v1` | 一般不改 |
-| `model` | 模型名称 | `mimo-v2.5` | 一般不改 |
-| `max_completion_tokens` | 最大输出Token | `131072` | 模型上限 131072，不建议调大 |
+| `model` | 模型名称 | `mimo-v2.6-pro` | 全小写；可选 `mimo-v2.6-pro`/`mimo-v2.6-flash`/`mimo-v2.6-pro-ultraspeed`，`mimo-v2.5` 将于 2026-10-21 下线 |
+| `max_completion_tokens` | 最大输出Token | `131072` | 模型硬上限 128K，超出会被 API 拒绝(400)，保存配置时也会被拦住 |
+| `deep_thinking` | 深度思考 | `false` | **转写逐字稿务必保持关闭**：v2.6 系列开启后可能把整篇结果写进 `reasoning_content` 而正文返回空；开启后工具会自动关闭思考重试兜底 |
 | `timeout` | API超时(秒) | `1800` | 短视频600，长视频1800 |
 
 #### douyin - 下载配置
@@ -92,9 +94,22 @@ python main.py
 #### video_analysis - 视频解析配置
 | 参数 | 说明 | 默认值 | 调节建议 |
 |------|------|--------|----------|
-| `fps` | 抽帧率(每秒) | `6` | 短视频2-3，长视频6-10，越高Token消耗越多 |
-| `media_resolution` | 分辨率档次 | `default` | `default`平衡，`max`最高 |
+| `fps` | 抽帧率(每秒) | `6` | 文档范围 0.1~10；短视频2-3，长视频6-10，越高Token消耗越多 |
+| `media_resolution` | 分辨率档次 | `default` | `default`平衡，`max`最高；其他值会被回退 default 并提示 |
 | `prompt` | 分析提示词 | 逐字稿 | 可自定义提取方式 |
+
+## 报错说明
+
+所有失败都会给出**具体原因**（哪个环节、HTTP 状态码、服务端原始信息、出错参数、处理建议），不会只说"解析失败"：
+
+- **保存配置**：非法值（如模型名拼错、`max_completion_tokens` 超过 131072、`fps` 超出 0.1~10）在写入前即被拒绝，并一次列出全部问题；
+- **解析失败**：任务面板直接展示原因，常见如 `max_completion_tokens is too large`（超出模型输出上限）、`failed to download or process media content`（MiMo 服务端拉不到视频，直链过期或非公网可达）、`Invalid API Key`、`Unsupported model`（模型名必须全小写且在可用列表内）；
+- **空正文但思考过程非空**：v2.6 系列开启深度思考时的已知现象（长视频转写任务上，模型把整篇结果写进 `reasoning_content` 后直接结束回合，`content` 为空）。关闭「深度思考」即可；工具在开启思考时也会自动关闭思考重试一次兜底；
+- 参数越界时程序会按合法边界**自动钳制**并在日志中说明钳到了哪个值（如 `max_completion_tokens` 超过 131072 时按 131072 执行），任务不会被一个非法配置直接卡死。
+- **不做分段拼接**：一次请求必须完整产出。若模型输出触及 `max_completion_tokens` 上限（`finish_reason=length`），工具不会把半截结果拼成“看似完整”的结果，而是在日志和结果中明确标注不完整，并提示调低 fps / 关闭深度思考后重试。
+- **思考内容零泄漏**：最终结果只可能来自模型的 `content` 通道；若服务端把思考内容重复写入正文，会自动剔除并记日志；系统提示词已明确要求“只输出原始文案，不要前言/解释/思考过程”。
+- **防“思考吞正文”**：系统提示词内含输出契约（结果必须写入正式回复正文、严禁只思考不输出）。v2.6 系列开思考时偶发“把完整结果写进 reasoning_content 后正文为空”，已通过提示词修复（实测 4/4 首轮即输出正文），并保留有上限的自动重试作为兜底。
+- 旧版 openai SDK（不支持 `max_completion_tokens`/`extra_body`/`stream`）会被自动检测并无缝切换到内置 HTTP 直连（基于项目已有依赖 httpx），**流式输出与深度思考开关不受影响**；如想走 SDK 原生通道，可执行 `python -m pip install -U openai`（非必需）。
 
 ## 输出文件
 
@@ -127,11 +142,12 @@ douyin_tool/
 ├── modules/
 │   ├── douyin_resolver/       # 内置的抖音链接解析包（自包含）
 │   ├── douyin_downloader.py   # 下载器（支持进度事件回调）
-│   └── video_analyzer.py      # MiMo 解析器（支持事件回调）
+│   └── video_analyzer.py      # MiMo 解析器（参数钳制 + 具体错误原因，支持事件回调）
 ├── server/                    # WebUI 后端
 │   ├── app.py                 # FastAPI 应用（API + 前端托管）
 │   ├── pipeline.py            # 处理流程：run_pipeline/run_download/run_parse（CLI/WebUI 共用）
 │   ├── task_manager.py        # 后台任务、任务模式与临时参数覆盖
+│   ├── config_validation.py   # 配置保存前的字段校验（具体错误原因）
 │   └── api/                   # tasks / uploads / config / history / files 路由
 ├── webui/                     # 前端源码（Vite + React + Ant Design）
 │   └── dist/                  # 预构建产物（由后端托管）
@@ -146,7 +162,7 @@ douyin_tool/
   - `overrides`: `{fps?, media_resolution?, prompt?}` 任务级临时参数（可选）
 - `PUT /api/uploads?filename=xxx` 原始流上传本地视频（body 为文件字节），返回 `{upload_id, filename, size}`
 - `GET /api/tasks` / `GET /api/tasks/{id}` 任务列表/详情
-- `WS /api/ws/tasks/{id}` 实时事件流（stage/download_progress/log/done/error）
+- `WS /api/ws/tasks/{id}` 实时事件流（stage/download_progress/log/analysis_delta/done/error，其中 analysis_delta 携带 {reasoning|content} 增量文本）
 - `GET /api/history` 历史记录；`GET /api/history/content?dir=&file=` 读文本
 - `GET /api/files/download|stream?dir=&file=` 下载 / Range流式播放
 - `GET/PUT /api/config` 配置读写

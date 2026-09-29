@@ -40,7 +40,7 @@ export default function HistoryPage() {
     try {
       setItems(await api.get<HistoryItem[]>('/api/history'))
     } catch (e) {
-      message.error(`加载失败: ${e instanceof Error ? e.message : e}`)
+      message.error(`加载失败: ${e instanceof Error ? e.message : e}`, 8)
     } finally {
       setLoading(false)
     }
