@@ -49,17 +49,18 @@ SUPPORTED_MODELS = (
 
 DEFAULT_MODEL = "mimo-v2.5"
 
-# ---- 空转（死循环）检测阈值 ----
-CONTENT_LOOP_GUARD = 8             # 同一段正文重复出现的次数上限
-CONTENT_LOOP_CHECK_EVERY = 40      # 每收到多少个正文增量包做一次重复检测
+# ---- 复读（空转）检测：思考与正文都检；只看重复次数，不限长度 ----
+LOOP_GUARD = 8                # 同一段内容重复出现的次数上限
+LOOP_TAIL_CHARS = 120         # 以末尾多少字作为“同一段”的比对模式
+LOOP_CHECK_EVERY = 40         # 每接收多少个增量包检测一次
 
 
 class _LoopAbort(Exception):
-    """内部信号：检测到模型在正文中重复空转，中断当前流式请求"""
+    """内部信号：检测到思考/正文复读，中断当前流式请求"""
 
-    def __init__(self, content_len: int):
-        self.content_len = content_len
-        super().__init__(f"content loop at {content_len} chars")
+    def __init__(self, kind: str):
+        self.kind = kind          # "reasoning" | "content"
+        super().__init__(f"{kind} loop")
 
 
 # ---------------- 内置 HTTP 直连（SDK 过旧时的兜底传输） ----------------
@@ -485,14 +486,22 @@ class VideoAnalyzer:
             return "未知"
         return getattr(response.choices[0], "finish_reason", None) or "未知"
 
+    @staticmethod
+    def _is_repeating(text: str) -> bool:
+        """复读检测：末尾一段话在全文已出现 LOOP_GUARD 次以上 → 判定空转。
+        只数重复次数、不看长度，避免误伤正常的长输出。"""
+        tail = text[-LOOP_TAIL_CHARS:]
+        return len(tail) >= LOOP_TAIL_CHARS and text.count(tail) >= LOOP_GUARD
+
     def _analyze(self, video_url: str, what: str) -> Optional[str]:
         """
         流式解析：实时推送思考过程与正文增量；失败原因写入 self.last_error。
+        思考与正文都做复读检测，命中即中断并走“关思考重试”恢复。
         """
         reasoning_parts: List[str] = []
         content_parts: List[str] = []
         finish_reason = "未知"
-        content_deltas_since_check = 0
+        r_check = c_check = 0
 
         try:
             stream = self._create_completion(self._build_messages(video_url),
@@ -512,24 +521,27 @@ class VideoAnalyzer:
                 if r_delta:
                     reasoning_parts.append(r_delta)
                     self._emit_delta("reasoning", r_delta)
+                    r_check += 1
+                    if r_check >= LOOP_CHECK_EVERY:
+                        r_check = 0
+                        if self._is_repeating("".join(reasoning_parts)):
+                            raise _LoopAbort("reasoning")
                 if c_delta:
                     content_parts.append(c_delta)
                     self._emit_delta("content", c_delta)
-                    content_deltas_since_check += 1
-                    if content_deltas_since_check >= CONTENT_LOOP_CHECK_EVERY:
-                        content_deltas_since_check = 0
-                        text_so_far = "".join(content_parts)
-                        tail = text_so_far[-120:]
-                        if len(tail) >= 120 and \
-                                text_so_far.count(tail) >= CONTENT_LOOP_GUARD:
-                            raise _LoopAbort(len(text_so_far))
+                    c_check += 1
+                    if c_check >= LOOP_CHECK_EVERY:
+                        c_check = 0
+                        if self._is_repeating("".join(content_parts)):
+                            raise _LoopAbort("content")
         except _LoopAbort as loop:
-            self.last_error = (
-                f"{what}：检测到模型在正文里重复输出同一段内容"
-                f"（{loop.content_len} 字内同一段重复出现 {CONTENT_LOOP_GUARD} 次以上），"
-                "已中断请求。这是模型的重复退化，请重试；若反复出现，请关闭「深度思考」")
-            self._emit_log(f"错误: {self.last_error}")
-            return None
+            label = "思考过程" if loop.kind == "reasoning" else "正文"
+            self._emit_log(
+                f"警告: 检测到{label}重复输出同一段内容"
+                f"（同一段已出现 {LOOP_GUARD} 次以上），已中断本次请求")
+            # 复读内容是垃圾：清掉面板上已流出的部分，再关思考重开一轮
+            return self._retry_without_thinking(video_url, what, f"{label}复读",
+                                                clear_stream=True)
         except TypeError:
             # 旧版 SDK 不支持流式：_create_completion 内部已降级为一次性返回
             response = self._create_completion(self._build_messages(video_url),
@@ -582,53 +594,88 @@ class VideoAnalyzer:
             content = content[:idx] + content[idx + len(reasoning[:80]):]
         return content.strip()
 
+    def _retry_without_thinking(self, video_url: str, what: str, reason: str,
+                                clear_stream: bool) -> Optional[str]:
+        """
+        统一恢复路径：中断后关闭深度思考重试一次（有上限，绝不循环）。
+        成功 → 返回干净正文；仍失败 → 给出带具体原因的报错。
+        clear_stream=True 时先清掉面板上已流出的复读垃圾。
+        """
+        if clear_stream and self.on_event:
+            self.on_event("analysis_reset", {"reasoning": True, "content": True})
+        if self.deep_thinking:
+            self._emit_log(f"正在自动关闭深度思考重试（原因：{reason}）…")
+        else:
+            self._emit_log(f"正在重试（原因：{reason}；深度思考本就处于关闭状态）…")
+
+        try:
+            response = self._create_completion(self._build_messages(video_url),
+                                               thinking=False, stream=False)
+        except Exception as e:
+            detail = self._describe_api_error(e)
+            self._emit_log(f"自动重试也未成功: {detail}")
+            self.last_error = (f"{what}：{reason}导致本次请求被中断，"
+                               f"关闭深度思考重试仍未成功：{detail}")
+            self._emit_log(f"错误: {self.last_error}")
+            return None
+
+        content = self._strip_reasoning_leak(self._msg_content(response) or "",
+                                             self._msg_reasoning(response))
+        if not content.strip():
+            self._set_empty_error(self._msg_reasoning(response),
+                                  self._finish_reason(response), what, reason)
+            return None
+        if self._is_repeating(content):
+            self.last_error = (
+                f"{what}：{reason}导致请求被中断，关闭深度思考重试后"
+                f"模型仍在重复输出同一段内容（同一段出现 {LOOP_GUARD} 次以上）。"
+                "请稍后重试，或调低 fps / 换用短视频片段重试")
+            self._emit_log(f"错误: {self.last_error}")
+            return None
+
+        fr = self._finish_reason(response)
+        self.finish_reason = fr
+        self._emit_log(f"重试成功：正文 {len(content)} 字（finish_reason={fr}）")
+        if fr == "length":
+            self._emit_log("警告: 重试结果同样达到输出上限，正文不完整"
+                           "（请调低 fps 或关闭深度思考后重试）")
+        self._emit_delta("content", content)
+        return content
+
     def _handle_empty(self, reasoning: str, finish_reason: str, video_url: str,
                       what: str) -> Optional[str]:
+        """流正常结束但正文为空：只思考没正文 → 关思考重试；否则给出具体原因"""
         # 已知坑：思考开启时，v2.6 可能把整篇结果写进 reasoning_content，content 返回空。
-        if reasoning.strip() and self.deep_thinking:
-            self._emit_log(
-                "警告: 模型把全部输出写入了思考过程(reasoning_content)、正文为空"
-                f"（finish_reason={finish_reason}）——长视频转写任务在开启深度思考时"
-                "会出现该现象。正在自动关闭深度思考重试一次…")
-            try:
-                response = self._create_completion(self._build_messages(video_url),
-                                                   thinking=False, stream=False)
-                content = self._msg_content(response)
-                if content and content.strip():
-                    self._emit_log("重试成功：关闭深度思考后模型正常返回了正文")
-                    content = self._strip_reasoning_leak(content, self._msg_reasoning(response))
-                    fr2 = self._finish_reason(response)
-                    self.finish_reason = fr2
-                    self._emit_log(f"重试成功：关闭深度思考后模型正常返回了正文（{len(content)} 字）")
-                    if fr2 == "length":
-                        self._emit_log("警告: 重试结果同样达到输出上限，正文不完整"
-                                       "（请调低 fps 或关闭深度思考后重试）")
-                    self._emit_delta("content", content)   # 一次性把最终正文推给前端
-                    return content
-                reasoning = self._msg_reasoning(response) or reasoning
-                finish_reason = self._finish_reason(response)
-            except Exception as e:
-                self._emit_log(f"自动重试也未成功: {self._describe_api_error(e)}")
+        # 此时思考是模型的真实产出（非复读垃圾），保留在面板里，仅关思考重试。
+        if reasoning.strip():
+            return self._retry_without_thinking(video_url, what,
+                                                "模型只输出思考、正文为空",
+                                                clear_stream=False)
+        self._set_empty_error(reasoning, finish_reason, what)
+        return None
 
+    def _set_empty_error(self, reasoning: str, finish_reason: str, what: str,
+                         reason: Optional[str] = None):
+        """正文为空时，给出带具体现象和解决办法的 last_error"""
+        prefix = f"{reason}导致请求被中断，" if reason else ""
         if finish_reason == "length":
             self.last_error = (
-                f"{what}：模型没有产出正文——输出在达到 max_completion_tokens"
+                f"{what}：{prefix}模型没有产出正文——输出在达到 max_completion_tokens"
                 f"（{self.max_tokens}）上限时被截断，且额度被思考过程占满。"
                 "可尝试：调低 fps / 把 media_resolution 改为 default，"
                 "或在设置页关闭「深度思考」，给正文留出输出空间")
         elif reasoning.strip():
             self.last_error = (
-                f"{what}：MiMo API 返回了空正文（finish_reason={finish_reason}），"
+                f"{what}：{prefix}MiMo API 返回了空正文（finish_reason={finish_reason}），"
                 f"但思考过程非空（{len(reasoning)} 字）——模型把结果写进了 reasoning_content "
                 "却没有生成正文。这是开启深度思考时的已知现象（v2.6 系列在长视频转写任务上尤为明显）。"
                 "处理办法：到设置页关闭「深度思考」后重试；本工具已自动重试过一次（关闭思考）仍未成功，"
                 "请手动关闭后重试，或换用 mimo-v2.5")
         else:
             self.last_error = (
-                f"{what}：MiMo API 返回了空内容（finish_reason={finish_reason}）且无思考过程。"
-                "可重试；若始终为空，请检查提示词或更换模型")
+                f"{what}：{prefix}MiMo API 返回了空内容（finish_reason={finish_reason}）"
+                "且无思考过程。可重试；若始终为空，请检查提示词或更换模型")
         self._emit_log(f"错误: {self.last_error}")
-        return None
 
     # ---------------- 对外入口 ----------------
 
