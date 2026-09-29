@@ -155,6 +155,12 @@ class TaskManager:
                 piece = data.get(key)
                 if piece:
                     task.analysis[key] = (task.analysis.get(key) or "") + piece
+        elif event_type == "analysis_reset":
+            # 空转中断后清空已流出的思考/正文，避免快照里留下垃圾
+            data = data or {}
+            for key in ("reasoning", "content"):
+                if data.get(key):
+                    task.analysis[key] = ""
         elif event_type == "done":
             task.title = data.get("title", "")
             task.result = data
