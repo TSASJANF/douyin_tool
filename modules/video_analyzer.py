@@ -50,18 +50,16 @@ SUPPORTED_MODELS = (
 DEFAULT_MODEL = "mimo-v2.5"
 
 # ---- 空转（死循环）检测阈值 ----
-THINKING_LOOP_GUARD_CHARS = 4000   # 思考累计超过该字数仍未产出正文 → 判定空转
-CONTENT_LOOP_GUARD = 3             # 同一段正文重复出现的次数上限
+CONTENT_LOOP_GUARD = 8             # 同一段正文重复出现的次数上限
 CONTENT_LOOP_CHECK_EVERY = 40      # 每收到多少个正文增量包做一次重复检测
 
 
 class _LoopAbort(Exception):
-    """内部信号：检测到模型重复空转，中断当前流式请求"""
+    """内部信号：检测到模型在正文中重复空转，中断当前流式请求"""
 
-    def __init__(self, kind: str, detail):
-        self.kind = kind
-        self.detail = detail
-        super().__init__(f"{kind} loop: {detail}")
+    def __init__(self, content_len: int):
+        self.content_len = content_len
+        super().__init__(f"content loop at {content_len} chars")
 
 
 # ---------------- 内置 HTTP 直连（SDK 过旧时的兜底传输） ----------------
@@ -494,7 +492,6 @@ class VideoAnalyzer:
         reasoning_parts: List[str] = []
         content_parts: List[str] = []
         finish_reason = "未知"
-        reasoning_len = 0
         content_deltas_since_check = 0
 
         try:
@@ -514,11 +511,7 @@ class VideoAnalyzer:
                 c_delta = getattr(delta, "content", None) or ""
                 if r_delta:
                     reasoning_parts.append(r_delta)
-                    reasoning_len += len(r_delta)
                     self._emit_delta("reasoning", r_delta)
-                    # 空转检测：思考了半天一个字正文都没有 → 中断，交给下方恢复逻辑
-                    if not content_parts and reasoning_len > THINKING_LOOP_GUARD_CHARS:
-                        raise _LoopAbort("thinking", reasoning_len)
                 if c_delta:
                     content_parts.append(c_delta)
                     self._emit_delta("content", c_delta)
@@ -529,20 +522,11 @@ class VideoAnalyzer:
                         tail = text_so_far[-120:]
                         if len(tail) >= 120 and \
                                 text_so_far.count(tail) >= CONTENT_LOOP_GUARD:
-                            raise _LoopAbort("content", len(text_so_far))
+                            raise _LoopAbort(len(text_so_far))
         except _LoopAbort as loop:
-            if loop.kind == "thinking":
-                self._emit_log(
-                    f"警告: 思考过程已累计 {loop.detail} 字仍未产出任何正文，"
-                    "判定模型陷入重复空转，已中断本次请求（不再等待它自己停下）")
-                # 清掉面板里已经流式堆出来的空转思考，别让用户看一堆垃圾
-                if self.on_event:
-                    self.on_event("analysis_reset", {"reasoning": True})
-                # 有思考无正文 → 走统一的“关思考重试”恢复
-                return self._handle_empty("".join(reasoning_parts), "loop", video_url, what)
             self.last_error = (
                 f"{what}：检测到模型在正文里重复输出同一段内容"
-                f"（{loop.detail} 字内同一段重复出现 {CONTENT_LOOP_GUARD} 次以上），"
+                f"（{loop.content_len} 字内同一段重复出现 {CONTENT_LOOP_GUARD} 次以上），"
                 "已中断请求。这是模型的重复退化，请重试；若反复出现，请关闭「深度思考」")
             self._emit_log(f"错误: {self.last_error}")
             return None
@@ -602,13 +586,10 @@ class VideoAnalyzer:
                       what: str) -> Optional[str]:
         # 已知坑：思考开启时，v2.6 可能把整篇结果写进 reasoning_content，content 返回空。
         if reasoning.strip() and self.deep_thinking:
-            if finish_reason == "loop":
-                self._emit_log("思考空转已中断，正在自动关闭深度思考重试…")
-            else:
-                self._emit_log(
-                    "警告: 模型把全部输出写入了思考过程(reasoning_content)、正文为空"
-                    f"（finish_reason={finish_reason}）——长视频转写任务在开启深度思考时"
-                    "会出现该现象。正在自动关闭深度思考重试一次…")
+            self._emit_log(
+                "警告: 模型把全部输出写入了思考过程(reasoning_content)、正文为空"
+                f"（finish_reason={finish_reason}）——长视频转写任务在开启深度思考时"
+                "会出现该现象。正在自动关闭深度思考重试一次…")
             try:
                 response = self._create_completion(self._build_messages(video_url),
                                                    thinking=False, stream=False)

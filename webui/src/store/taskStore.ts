@@ -138,21 +138,6 @@ function connectWs(taskId: string, set: SetState, get: GetState) {
         })
         break
       }
-      case 'analysis_reset': {
-        // 思考空转被中断：清掉已流出的思考/正文，不把垃圾留给用户看
-        const r = msg.data as { reasoning?: boolean; content?: boolean }
-        const cur = detail.analysis ?? { reasoning: '', content: '' }
-        set({
-          detail: {
-            ...detail,
-            analysis: {
-              reasoning: r.reasoning ? '' : cur.reasoning,
-              content: r.content ? '' : cur.content,
-            },
-          },
-        })
-        break
-      }
       case 'log': {
         const text = (msg.data as { text: string }).text
         const logs = [...detail.logs, text].slice(-MAX_LOGS)
