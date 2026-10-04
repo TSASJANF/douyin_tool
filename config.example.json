@@ -12,6 +12,11 @@
     "max_retry": 3,
     "video_quality": "highest"
   },
+  "sph": {
+    "cookie": "",
+    "api_base": "",
+    "api_token": ""
+  },
   "video_analysis": {
     "fps": 6,
     "media_resolution": "default",

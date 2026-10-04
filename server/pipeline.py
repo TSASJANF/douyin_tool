@@ -1,9 +1,12 @@
 """
 处理流程（三个入口，CLI 与 WebUI 共用）
 
-  run_pipeline  完整流程: 下载1080P → 获取720P直链 → MiMo解析 → 保存正文
-  run_download  仅下载:   解析链接 → 下载1080P → 保存 info（不解析）
+  run_pipeline  完整流程: 解析链接 → 下载视频 → 取解析直链 → MiMo解析 → 保存正文
+  run_download  仅下载:   解析链接 → 下载视频 → 保存 info（不解析）
   run_parse     仅解析:   本地文件或视频直链 → MiMo解析 → 保存正文（不下载）
+
+平台自动识别：粘贴抖音链接/口令或视频号分享链接都走同一套流程，
+由 modules.platform.detect_platform 判断平台并选择对应下载器，无需用户选择。
 
 on_event(type, data) 回调接收事件：
   - stage              {index, label}        阶段切换
@@ -19,18 +22,31 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from modules.douyin_downloader import DouyinDownloader
+from modules.platform import PLATFORM_NAMES, create_downloader, detect_platform
 from modules.video_analyzer import VideoAnalyzer
 from .config_store import output_root
 
 EventCallback = Callable[[str, dict], None]
 
-STAGES_FULL = [
-    {"index": 1, "label": "解析链接并下载1080P视频"},
-    {"index": 2, "label": "获取720P直链"},
-    {"index": 3, "label": "解析视频内容"},
-]
-STAGES_DOWNLOAD = [{"index": 1, "label": "解析链接并下载1080P视频"}]
+# 阶段文案按平台区分：抖音要单独跟踪 720P 直链，视频号分享接口直接给出直链
+STAGES = {
+    "douyin": {
+        "full": [
+            {"index": 1, "label": "解析链接并下载1080P视频"},
+            {"index": 2, "label": "获取720P直链"},
+            {"index": 3, "label": "解析视频内容"},
+        ],
+        "download": [{"index": 1, "label": "解析链接并下载1080P视频"}],
+    },
+    "sph": {
+        "full": [
+            {"index": 1, "label": "解析视频号链接并下载视频"},
+            {"index": 2, "label": "获取视频直链"},
+            {"index": 3, "label": "解析视频内容"},
+        ],
+        "download": [{"index": 1, "label": "解析视频号链接并下载视频"}],
+    },
+}
 STAGES_PARSE = [{"index": 1, "label": "解析视频内容"}]
 
 
@@ -45,6 +61,18 @@ def is_image_content(url_text: str) -> bool:
         if ext in url_lower:
             return True
     return False
+
+
+def resolve_platform(url_text: str) -> str:
+    """识别输入链接所属平台；无法识别时给出带原文的具体错误"""
+    platform = detect_platform(url_text)
+    if not platform:
+        raise PipelineError(
+            "无法识别的链接：本工具支持抖音链接/口令，以及视频号分享链接"
+            "（如 https://weixin.qq.com/sph/xxxxxx）。"
+            f"收到的输入：{url_text.strip()[:120]}"
+        )
+    return platform
 
 
 def _dir_rel(output_dir: Path) -> str:
@@ -79,6 +107,29 @@ def _done_payload(title: str, output_dir: Path, content: Optional[str]) -> dict:
     }
 
 
+async def _analyze_video(analyzer: VideoAnalyzer, analysis_url: str, platform: str,
+                         video_path, on_event: EventCallback) -> Optional[str]:
+    """调 MiMo 解析；视频号在直链解析失败时回退到已下载的本地文件重试一次"""
+    content = await asyncio.to_thread(analyzer.analyze_remote_video, analysis_url)
+    if content:
+        return content
+
+    local_file = Path(video_path) if video_path else None
+    if platform != "sph" or not local_file or not local_file.is_file():
+        return content
+
+    # 视频号 CDN 直链可能限制外部服务抓取；直链失败时用已下载的本地文件（base64）兜底
+    remote_error = analyzer.last_error or "MiMo API 未返回任何内容"
+    on_event("log", {"text": f"直链解析未成功（{remote_error}），改用已下载的本地文件重试…"})
+    content = await asyncio.to_thread(analyzer.analyze_local_video, str(local_file))
+    if not content:
+        raise PipelineError(
+            f"直链解析失败：{remote_error}；"
+            f"改用本地文件重试也失败：{analyzer.last_error or '未知原因'}"
+        )
+    return content
+
+
 # ---------------- 完整流程 ----------------
 
 async def run_pipeline(url_text: str, config: dict, on_event: EventCallback) -> dict:
@@ -90,53 +141,37 @@ async def run_pipeline(url_text: str, config: dict, on_event: EventCallback) -> 
     if is_image_content(url_text):
         raise PipelineError("检测到图片内容，本工具仅支持视频解析。")
 
+    platform = resolve_platform(url_text)
+    stages = STAGES[platform]["full"]
     forward: EventCallback = lambda t, d: on_event(t, d)
 
     # ---- 阶段 1: 下载 ----
-    on_event("stage", STAGES_FULL[0])
-    douyin = DouyinDownloader(config.get("douyin", {}), on_event=forward)
+    on_event("stage", stages[0])
+    downloader = create_downloader(platform, config, on_event=forward)
     analyzer = VideoAnalyzer(config.get("mimo_api", {}), config.get("video_analysis", {}),
                              on_event=forward)
 
-    download_result = await douyin.download(url_text)
+    download_result = await downloader.download(url_text)
 
     if not download_result:
-        raise PipelineError(douyin.last_error or "下载失败：下载器未给出具体原因，请查看运行日志")
+        raise PipelineError(downloader.last_error or "下载失败：下载器未给出具体原因，请查看运行日志")
 
-    video_1080p = download_result.get("video_1080p")
+    video_path = download_result.get("video_1080p")
     output_dir: Path = download_result.get("output_dir")
 
-    on_event("log", {"text": f"1080P视频已保存: {video_1080p}"})
+    on_event("log", {"text": f"{PLATFORM_NAMES[platform]}视频已保存: {video_path}"})
 
-    # ---- 阶段 2: 720P 直链 ----
-    on_event("stage", STAGES_FULL[1])
+    # ---- 阶段 2: 送解析的直链 ----
+    on_event("stage", stages[1])
 
-    # 从下载结果中获取qualities，避免重复解析
-    result = download_result.get("result", {})
-    qualities = result.get("media", {}).get("qualities", [])
-
-    url_720p = None
-    for q in qualities:
-        if "720" in q.get("quality_name", ""):
-            url_720p = q.get("url")
-            break
-
-    if not url_720p:
-        raise PipelineError("未找到 720P 清晰度的视频直链：该作品可能没有此清晰度，或链接已失效，请重试或换一个视频")
-
-    on_event("log", {"text": f"720P接口URL: {url_720p[:80]}..."})
-
-    real_direct_url = await douyin.get_real_direct_url(url_720p)
-
-    if not real_direct_url:
-        raise PipelineError(douyin.last_error or "获取真正直链失败：CDN 接口未返回 302 跳转地址，直链可能已失效，请重试")
-
-    on_event("log", {"text": f"720P真正直链: {real_direct_url[:80]}..."})
+    analysis_url = await downloader.prepare_analysis_url(download_result)
+    if not analysis_url:
+        raise PipelineError(downloader.last_error or "获取视频直链失败，请重试")
 
     # ---- 阶段 3: MiMo 解析（同步阻塞调用，放入线程）----
-    on_event("stage", STAGES_FULL[2])
+    on_event("stage", stages[2])
 
-    content = await asyncio.to_thread(analyzer.analyze_remote_video, real_direct_url)
+    content = await _analyze_video(analyzer, analysis_url, platform, video_path, on_event)
 
     if not content:
         # 透传解析器的具体失败原因（HTTP 状态码/服务端信息/处理建议），不让用户猜
@@ -155,20 +190,22 @@ async def run_pipeline(url_text: str, config: dict, on_event: EventCallback) -> 
 
 async def run_download(url_text: str, config: dict, on_event: EventCallback) -> dict:
     """
-    仅下载流程：解析链接并下载1080P，不做 MiMo 解析。
+    仅下载流程：解析链接并下载最高画质视频，不做 MiMo 解析。
 
     返回: {"title", "content": None, "output_dir", "dir", "files"}
     """
     if is_image_content(url_text):
         raise PipelineError("检测到图片内容，本工具仅支持视频。")
 
-    on_event("stage", STAGES_DOWNLOAD[0])
-    douyin = DouyinDownloader(config.get("douyin", {}), on_event=lambda t, d: on_event(t, d))
+    platform = resolve_platform(url_text)
 
-    download_result = await douyin.download(url_text)
+    on_event("stage", STAGES[platform]["download"][0])
+    downloader = create_downloader(platform, config, on_event=lambda t, d: on_event(t, d))
+
+    download_result = await downloader.download(url_text)
 
     if not download_result:
-        raise PipelineError(douyin.last_error or "下载失败：下载器未给出具体原因，请查看运行日志")
+        raise PipelineError(downloader.last_error or "下载失败：下载器未给出具体原因，请查看运行日志")
 
     on_event("log", {"text": f"下载完成: {download_result.get('video_1080p')}"})
 
@@ -204,6 +241,14 @@ async def run_parse(source_type: str, source: str, config: dict, on_event: Event
     else:
         if not source.startswith(("http://", "https://")):
             raise PipelineError("请提供 http(s) 视频直链")
+        # 本模式要求的是可直接抓取的视频直链；分享页链接要走「视频解析/仅下载」
+        platform = detect_platform(source)
+        if platform:
+            name = PLATFORM_NAMES.get(platform, platform)
+            raise PipelineError(
+                f"这是{name}的分享链接，不是可直接解析的视频直链。"
+                f"请改用「视频解析」（下载并提取文案）或「仅下载」，本工具会自动识别链接类型"
+            )
         on_event("log", {"text": f"解析视频直链: {source[:80]}..."})
         title = "直链解析"
         output_dir = output_root() / f"直链解析_{time.strftime('%Y%m%d_%H%M%S')}"

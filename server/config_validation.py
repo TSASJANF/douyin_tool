@@ -10,6 +10,7 @@
 - max_completion_tokens 上限 131072（v2.5/v2.6 全系最大输出 128K）
 - fps 范围 [0.1, 10]（文档默认值 2）
 - media_resolution 仅支持 default / max
+- sph（视频号）：cookie 是腾讯元宝登录 Cookie，api_base 是本机 wx_channels_download 服务地址
 """
 
 from typing import List
@@ -139,6 +140,19 @@ def validate_config(config: dict) -> None:
         if dy.get("video_quality") is not None and dy["video_quality"] not in VIDEO_QUALITIES:
             problems.append(f"douyin.video_quality 只能是 "
                             f"{'、'.join(VIDEO_QUALITIES)}，当前是 {dy['video_quality']!r}")
+
+    # ---------- sph（视频号） ----------
+    sph = config.get("sph")
+    if sph is not None and not isinstance(sph, dict):
+        problems.append("sph 必须是配置对象（cookie / api_base / api_token）")
+    elif isinstance(sph, dict):
+        for key in ("cookie", "api_base", "api_token"):
+            value = sph.get(key)
+            if value is not None and not isinstance(value, str):
+                problems.append(f"sph.{key} 必须是字符串，当前是 {value!r}")
+        api_base = (sph.get("api_base") or "").strip() if isinstance(sph.get("api_base"), str) else ""
+        if api_base and not api_base.startswith(("http://", "https://")):
+            problems.append(f"sph.api_base 必须以 http:// 或 https:// 开头，当前是 {api_base!r}")
 
     if problems:
         raise ConfigValidationError(problems)

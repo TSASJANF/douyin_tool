@@ -20,8 +20,8 @@ const menuItems = [
 ]
 
 const PAGE_META: Record<string, { title: string; desc: string }> = {
-  '/parse': { title: '视频解析', desc: '粘贴抖音链接或口令，自动下载并提取视频文案' },
-  '/download': { title: '仅下载', desc: '只下载 1080P 视频，不调用解析、不消耗 API 额度' },
+  '/parse': { title: '视频解析', desc: '粘贴抖音或视频号链接，自动识别平台，下载并提取视频文案' },
+  '/download': { title: '仅下载', desc: '只下载视频（抖音 1080P / 视频号原画），不调用解析、不消耗 API 额度' },
   '/parse-only': { title: '仅解析', desc: '本地视频文件或视频直链，直接提取文案' },
   '/history': { title: '历史记录', desc: '浏览已下载视频与解析结果，支持在线播放' },
   '/settings': { title: '设置', desc: '全局参数配置，保存后对后续创建的任务生效' },

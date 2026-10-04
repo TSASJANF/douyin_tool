@@ -71,7 +71,7 @@ async def main():
     while True:
         try:
             print("\n" + "-" * 40)
-            url_text = input("请输入抖音链接或口令（输入 'q' 退出）: ").strip()
+            url_text = input("请输入抖音/视频号链接或口令（输入 'q' 退出）: ").strip()
 
             if url_text.lower() in ('q', 'quit', 'exit'):
                 print("再见！")

@@ -8,7 +8,7 @@ import type { TaskOverrides } from '../types'
 
 const { TextArea } = Input
 
-/** 视频解析页：粘贴抖音链接 → 下载 + 解析全流程 */
+/** 视频解析页：粘贴抖音/视频号链接 → 下载 + 解析全流程（平台自动识别） */
 export default function ParsePage() {
   const { message } = App.useApp()
   const [url, setUrl] = useState('')
@@ -23,7 +23,7 @@ export default function ParsePage() {
   const submit = async () => {
     const text = url.trim()
     if (!text) {
-      message.warning('请输入抖音链接或分享口令')
+      message.warning('请输入抖音/视频号链接或分享口令')
       return
     }
     setSubmitting(true)
@@ -49,7 +49,7 @@ export default function ParsePage() {
           <Space direction="vertical" style={{ width: '100%' }} size="small">
             <TextArea
               rows={3}
-              placeholder={'粘贴抖音链接或分享口令，例如：\n7.89 复制打开抖音 https://v.douyin.com/xxxxxx/ ...'}
+              placeholder={'粘贴抖音链接/口令，或视频号分享链接，自动识别平台，例如：\n7.89 复制打开抖音 https://v.douyin.com/xxxxxx/ ...\nhttps://weixin.qq.com/sph/xxxxxx'}
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               onPressEnter={(e) => {

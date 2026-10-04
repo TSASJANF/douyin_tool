@@ -46,7 +46,7 @@ function putUpload(file: File, onProgress: (percent: number) => void): Promise<U
   })
 }
 
-/** 仅解析页：本地文件或视频直链 → MiMo 解析（不下载抖音视频） */
+/** 仅解析页：本地文件或视频直链 → MiMo 解析（不做下载） */
 export default function ParseOnlyPage() {
   const { message } = App.useApp()
   const [sourceType, setSourceType] = useState<ParseSourceType>('file')
@@ -120,7 +120,8 @@ export default function ParseOnlyPage() {
         <Card title="新建解析任务" size="small" style={{ marginBottom: 16 }}>
           <Space direction="vertical" style={{ width: '100%' }} size="small">
             <Text type="secondary">
-              选择本地视频文件或粘贴视频直链，直接送 MiMo 解析（不经过抖音下载）。
+              选择本地视频文件或粘贴视频直链，直接送 MiMo 解析（不经过下载流程）。
+              抖音/视频号的分享链接请用「视频解析」或「仅下载」。
             </Text>
 
             <Segmented

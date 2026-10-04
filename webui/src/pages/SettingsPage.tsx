@@ -115,6 +115,41 @@ function DouyinForm() {
   )
 }
 
+function SphForm() {
+  return (
+    <>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="视频号解析需要登录态（视频号没有公开 API）"
+        description="本工具用的是 wx_channels_download 的分享链接解析流程。默认走内置流程：把腾讯元宝（yuanbao.tencent.com）的登录 Cookie 填在下面即可。已安装 wx_channels_download 的用户，可以改为填写它的服务地址，由它来解析。"
+      />
+      <Form.Item
+        name={['sph', 'cookie']}
+        label="腾讯元宝 Cookie"
+        extra="浏览器登录 https://yuanbao.tencent.com 后，开发者工具 Network 里复制请求的完整 Cookie 值；失效后需重新复制"
+      >
+        <TextArea rows={3} placeholder="hy_user=...; hy_token=...（也可能是其它字段，整串粘贴即可）" />
+      </Form.Item>
+      <Form.Item
+        name={['sph', 'api_base']}
+        label="外部解析服务地址（可选）"
+        extra="填了则优先用它解析，忽略上面的 Cookie。例如本机运行的 wx_channels_download：http://127.0.0.1:2022"
+      >
+        <Input placeholder="http://127.0.0.1:2022" />
+      </Form.Item>
+      <Form.Item
+        name={['sph', 'api_token']}
+        label="外部服务令牌（可选）"
+        extra="外部服务需要鉴权时，填它的访问令牌（作为 Bearer Token 发送）"
+      >
+        <Input.Password placeholder="一般留空" />
+      </Form.Item>
+    </>
+  )
+}
+
 function AnalysisForm() {
   return (
     <>
@@ -206,6 +241,7 @@ export default function SettingsPage() {
           items={[
             { key: 'mimo', label: 'MiMo API', children: <MiMoForm /> },
             { key: 'douyin', label: '抖音下载', children: <DouyinForm /> },
+            { key: 'sph', label: '视频号', children: <SphForm /> },
             { key: 'analysis', label: '视频解析', children: <AnalysisForm /> },
           ]}
         />

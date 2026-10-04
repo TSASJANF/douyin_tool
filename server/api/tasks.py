@@ -15,7 +15,7 @@ async def create_task(req: TaskCreateRequest):
 
     if req.mode in ("full", "download"):
         if not req.url.strip():
-            raise HTTPException(status_code=400, detail="请提供抖音链接或口令")
+            raise HTTPException(status_code=400, detail="请提供抖音/视频号链接或口令")
         task = manager.create(req.url, mode=req.mode, overrides=overrides)
         return manager.view(task)
 

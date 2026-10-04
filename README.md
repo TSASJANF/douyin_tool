@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-18181B.svg)](./LICENSE)
 
-整合抖音视频下载与 MiMo 视频解析，提取视频文案逐字稿。提供 **WebUI** 与 **命令行** 两种使用方式，完全自包含，clone 即用。
+整合**抖音 / 微信视频号**视频下载与 MiMo 视频解析，提取视频文案逐字稿。提供 **WebUI** 与 **命令行** 两种使用方式，完全自包含，clone 即用。
 
 > 本项目仅供个人学习与内容研究使用，请遵守平台条款与相关法律法规。
 
@@ -11,8 +11,10 @@
 - **WebUI**：实时下载进度（速度/百分比/剩余时间）、步骤时间线、运行日志、历史记录浏览、视频在线播放、可视化配置管理
 - **流式解析**：模型输出实时回显，思考过程默认折叠（可点击展开），正文边生成边显示
 - **三种任务模式**：全流程（下载+解析）、仅下载（不消耗 API 额度）、仅解析（本地文件上传或视频直链）
+- **平台自动识别**：粘贴链接即自动分辨**抖音 / 视频号**并走对应流程，不需要选平台，也没有新增入口
 - **临时参数**：解析任务可临时覆盖抽帧率/分辨率/提示词，仅当次任务生效，不改全局配置
 - 自动下载抖音视频（1080P 保留，720P 直链送解析）
+- 自动下载视频号分享链接的视频（原画保存）。视频号没有公开 API，需要一次性配置登录态，见[视频号解析](#视频号解析)
 - **完全自包含**：链接解析模块内置，整个文件夹可任意搬移
 - 提供 REST API 与 WebSocket 事件流，可供脚本集成
 
@@ -52,8 +54,8 @@ Windows 下可双击 `start.bat` / `stop.bat` / `restart.bat`。
 
 | 页面 | 功能 |
 |------|------|
-| 视频解析 | 粘贴链接/口令 → 下载+解析全流程 → 实时进度 → 文案复制/下载 |
-| 仅下载 | 只下载 1080P 视频，不调用 MiMo、不消耗 API 额度 |
+| 视频解析 | 粘贴链接/口令（抖音或视频号，自动识别）→ 下载+解析全流程 → 实时进度 → 文案复制/下载 |
+| 仅下载 | 只下载视频（抖音 1080P / 视频号原画），不调用 MiMo、不消耗 API 额度 |
 | 仅解析 | 选择本地视频文件（上传）或粘贴视频直链，直接送 MiMo 解析 |
 | 历史记录 | 浏览 output 目录、查看正文/视频信息、视频在线播放、文件下载 |
 | 设置 | 可视化编辑 config.json（保存自动备份为 config.json.bak，对后续任务生效） |
@@ -68,7 +70,7 @@ Windows 下可双击 `start.bat` / `stop.bat` / `restart.bat`。
 python main.py
 ```
 
-输入抖音链接/口令即可开始解析，行为与 WebUI 完全一致（共用同一处理流程）。
+输入抖音链接/口令或视频号分享链接即可开始解析，平台自动识别，行为与 WebUI 完全一致（共用同一处理流程）。
 
 ## 配置说明
 
@@ -98,11 +100,41 @@ python main.py
 | `media_resolution` | 分辨率档次 | `default` | `default`平衡，`max`最高；其他值会被回退 default 并提示 |
 | `prompt` | 分析提示词 | 逐字稿 | 可自定义提取方式 |
 
+#### sph - 视频号配置
+
+视频号没有公开 API，解析分享链接需要登录态。下面两种方式**二选一**即可（默认走前者）。
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `cookie` | 腾讯元宝（yuanbao.tencent.com）登录 Cookie，走内置解析流程 | 空 |
+| `api_base` | 外部 wx_channels_download 服务地址；填了则优先用它解析，忽略 `cookie` | 空 |
+| `api_token` | 外部服务的访问令牌（以 Bearer Token 发送），一般留空 | 空 |
+
+> `cookie` 也可用环境变量 `SPH_COOKIE` 提供；`api_token` 可用 `SPH_API_TOKEN`。
+
+## 视频号解析
+
+视频号的分享链接（形如 `https://weixin.qq.com/sph/xxxxxx`）直接粘到「视频解析」或「仅下载」即可，和抖音共用一个输入框 —— 工具按链接域名自动判断平台，不需要选择，也没有单独的入口。
+
+**解析原理（复用现成开源项目，不是自己造的）**：流程移植自知名开源项目 [wx_channels_download](https://github.com/ltaoo/wx_channels_download)（Go，MIT + Commons Clause，10k+ star）的视频号分享链接解析路径：
+
+1. `POST https://yuanbao.tencent.com/api/weixin/get_parse_result`，用分享链接换取 `wx_export_id` 与 `playable_url`；
+2. 从 `playable_url` 取出 `token` / `eid`，再调 `https://channels.weixin.qq.com/finder-preview/api/feed/get_feed_info` 拿到视频直链（优先 h264，回退 `videoUrl` / h265）。
+
+**为什么需要 Cookie**：第 1 步是腾讯元宝的登录态接口，未登录直接返回 401 —— 这是视频号侧的限制，在不装证书、不劫持微信客户端的前提下没有免登录的服务端方案。因此保留了 ltaoo 原项目的两条路：
+
+- **内置流程（默认）**：到「设置 → 视频号」填 `sph.cookie`。取法：浏览器登录 <https://yuanbao.tencent.com>，开发者工具 Network 里复制请求的完整 Cookie 值。Cookie 会过期（几天到一个月不等），失效后重新复制即可，任务报错里会明确提示。
+- **外部服务（可选）**：已经在跑 wx_channels_download 的话，把它的服务地址填进 `sph.api_base`（例如 `http://127.0.0.1:2022`），解析交给它（它能自动读取本机 Cookie），本工具只消费结果。
+
+**已知行为**：图文分享链接会被识别并明确提示「仅支持视频」；视频号直链解析失败时会把已下载的本地文件回退给 MiMo 再试一次；分享链接粘进「仅解析」页会提示改用前两个页面（该页要求可直接抓取的视频直链）。
+
 ## 报错说明
 
 所有失败都会给出**具体原因**（哪个环节、HTTP 状态码、服务端原始信息、出错参数、处理建议），不会只说"解析失败"：
 
-- **保存配置**：非法值（如模型名拼错、`max_completion_tokens` 超过 131072、`fps` 超出 0.1~10）在写入前即被拒绝，并一次列出全部问题；
+- **保存配置**：非法值（如模型名拼错、`max_completion_tokens` 超过 131072、`fps` 超出 0.1~10、`sph.api_base` 不是 http(s) 地址）在写入前即被拒绝，并一次列出全部问题；
+- **无法识别的链接**：既不是抖音链接/口令也不是视频号分享链接时，报错会带上收到的原文，不会静默当成抖音去跑；
+- **视频号解析失败**：缺登录态时会先免登录探测分享页，然后明确告诉你「分享链接本身有效（标题：…；作者：…），但下载视频需要登录态」并说明去哪儿填 Cookie；`此内容暂时无法播放` 表示 Cookie 已失效、或内容仅限微信内观看/作者限制了分享；`未找到视频号分享链接` 表示输入里没有 `weixin.qq.com/sph/...` 这类链接；
 - **解析失败**：任务面板直接展示原因，常见如 `max_completion_tokens is too large`（超出模型输出上限）、`failed to download or process media content`（MiMo 服务端拉不到视频，直链过期或非公网可达）、`Invalid API Key`、`Unsupported model`（模型名必须全小写且在可用列表内）；
 - **空正文但思考过程非空**：v2.6 系列开启深度思考时的已知现象（长视频转写任务上，模型把整篇结果写进 `reasoning_content` 后直接结束回合，`content` 为空）。关闭「深度思考」即可；工具在开启思考时也会自动关闭思考重试一次兜底；
 - 参数越界时程序会按合法边界**自动钳制**并在日志中说明钳到了哪个值（如 `max_completion_tokens` 超过 131072 时按 131072 执行），任务不会被一个非法配置直接卡死。
@@ -116,7 +148,7 @@ python main.py
 ## 输出文件
 
 每个视频在 `output/视频标题/` 目录下：
-- `视频标题_1080p.mp4` - 保留的原视频
+- `视频标题_1080p.mp4` - 保留的原视频（视频号为 `视频标题_原画.mp4`）
 - `info.txt` - 视频信息
 - `正文.txt` - 解析出的文案
 
@@ -143,7 +175,11 @@ douyin_tool/
 ├── config.example.json        # 配置模板
 ├── modules/
 │   ├── douyin_resolver/       # 内置的抖音链接解析包（自包含）
-│   ├── douyin_downloader.py   # 下载器（支持进度事件回调）
+│   ├── sph_resolver/          # 内置的视频号链接解析包（流程移植自 wx_channels_download）
+│   ├── base_downloader.py     # 下载器公共能力：进度/重试/落盘
+│   ├── platform.py            # 平台自动识别与下载器分发（粘贴链接无需选平台）
+│   ├── douyin_downloader.py   # 抖音下载器（支持进度事件回调）
+│   ├── sph_downloader.py      # 视频号下载器（分享链接 → 直链 → 落盘）
 │   └── video_analyzer.py      # MiMo 解析器（参数钳制 + 具体错误原因，支持事件回调）
 ├── server/                    # WebUI 后端
 │   ├── app.py                 # FastAPI 应用（API + 前端托管）
@@ -159,6 +195,7 @@ douyin_tool/
 ## REST API（供脚本调用）
 
 - `POST /api/tasks` `{url, mode, source_type?, upload_id?, overrides?}` 创建任务
+  - `url` 可以是抖音链接/口令，也可以是视频号分享链接（平台自动识别）
   - `mode`: `full`（下载+解析）/ `download`（仅下载）/ `parse`（仅解析）
   - `parse` 模式：`source_type=url` 时 `url` 为视频直链；`source_type=file` 时传 `upload_id`
   - `overrides`: `{fps?, media_resolution?, prompt?}` 任务级临时参数（可选）
